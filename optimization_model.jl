@@ -9,26 +9,6 @@ Pkg.add("Gurobi")
 
 using CSV, DataFrames, JuMP, Gurobi
 
-# Read the CSV
-SCALE_MWH = 1000
-SCALE_DOLLAR = 1000
-
-fixed_cost = CSV.read("fixed_cost_2.csv",DataFrame) ./ SCALE_DOLLAR
-
-variable_cost = CSV.read("variable_cost_2.csv",DataFrame) ./ SCALE_DOLLAR
-
-co2_intensity = CSV.read("co2_intensity.csv",DataFrame)
-
-P_max_s = 95897829.43 / SCALE_MWH
-P_max_w = 11158008 / SCALE_MWH;
-P_max_s, P_max_w
-
-Availability_matrix = CSV.read("Availability.csv", DataFrame);
-println(size(Availability_matrix))
-
-curtailment_costs = [0, 2, 0, 0, 0, 0] ./ SCALE_DOLLAR
-
-
 ############### Constant of the model 
 
 eta = 0.8; # Efficiency of the battery
@@ -41,9 +21,20 @@ T = 50
 T_start = 987
 time_ls_opt = T_start-24:T_start+24
 
+
+hrs = 4000
+hre = 5000
+sel_hrs = hrs:hre
+println(sel_hrs)
+techs = 5
+n_eu = 4
+# pad year by 1 day
+add_h = 24
+
+
 println("Timespan: ", T)
 #time_ls = 1+add_h:T-add_h
-time_ls = T_start-24+add_h:T_start+24-add_h
+time_ls = T_start-24+1:T_start+24-add_h
 vre_ls = 1:2
 fossil_ls = 3:4
 batt_ind = 5
@@ -52,9 +43,35 @@ batt_ind = 5
 
 ######## Need to create a loop on that ========
 
-name_demand_flex_input = ["demand_flex_vre10", "demand_flex_vre20", "demand_flex_vre50", "demand_flex_vre100"]
+name_demand_flex_input = ["demand_flex0_vre0", "demand_flex50_vre0", "demand_flex50_vre50", 
+"demand_flex50_vre100", "demand_flex100_vre0", "demand_flex100_vre50", "demand_flex100_vre100"]
+
+name_cost_ls = ["mean", "max"]
+
 
 for name in name_demand_flex_input
+
+    for cost_name in name_cost_ls
+    
+        # Read the CSV
+    SCALE_MWH = 1000
+    SCALE_DOLLAR = 1000
+
+    fixed_cost = CSV.read("fixed_cost_" *cost_name*".csv",DataFrame) ./ SCALE_DOLLAR
+
+    variable_cost = CSV.read("variable_cost" *cost_name*".csv",DataFrame) ./ SCALE_DOLLAR
+
+    co2_intensity = CSV.read("co2_intensity.csv",DataFrame)
+
+    P_max_s = 95897829.43 / SCALE_MWH
+    P_max_w = 11158008 / SCALE_MWH;
+    P_max_s, P_max_w
+
+    Availability_matrix = CSV.read("Availability.csv", DataFrame);
+    println(size(Availability_matrix))
+
+    curtailment_costs = [0, 2, 0, 0, 0, 0] ./ SCALE_DOLLAR
+
 
 
     file_to_read = name*".csv"
@@ -67,14 +84,7 @@ for name in name_demand_flex_input
 
     #######################################
 
-    hrs = 4000
-    hre = 5000
-    sel_hrs = hrs:hre
-    println(sel_hrs)
-    techs = 5
-    n_eu = 4
-    # pad year by 1 day
-    add_h = 24
+
 
     println("Cost")
     C_FC = fixed_cost[1:techs,1]
@@ -186,7 +196,7 @@ for name in name_demand_flex_input
     @objective(model, Min, 
         (
             sum((C_FC[i] + C_FOM[i])*P[i] for i in 1:n) +
-            sum(sum((C_VOM[i] + 100* E_CO2[i])* X_gen[t, i] for i in 1:n) for t in time_ls_opt) +
+            sum(sum((C_VOM[i] + CO2_price* E_CO2[i])* X_gen[t, i] for i in 1:n) for t in time_ls_opt) +
             sum(sum(C_curt[i] * X_cur[t, i] for i in 1:n) for t in time_ls)
     ));
 
@@ -267,7 +277,7 @@ for name in name_demand_flex_input
 
     # First hour need to be equal to one
     # Start with a charged battery
-    @constraint(model, SOC_t_1, X_soc[time_ls_opt[1]] == 1)
+    @constraint(model, SOC_t_1, X_soc[time_ls_opt[1]] == 0)
 
     #
     @constraint(model, SOC_t[t in time_ls_opt[2]:time_ls_opt[end]], (X_soc[t]-X_soc[t-1])*H*P[5] == (X_ch[t-1]- X_gen[t-1,5]));
@@ -279,6 +289,7 @@ for name in name_demand_flex_input
 
     using CSV
 
+    # Save the results for the generation
     # Assuming your matrix is named `my_matrix`
     my_matrix = [value.(X_gen) value.(X_soc) X_D[time_ls_opt]]  # Replace this with your actual matrix
     println(my_matrix)
@@ -290,11 +301,30 @@ for name in name_demand_flex_input
     df = DataFrame([Symbol(name) => my_matrix[:, i] for (i, name) in enumerate(column_names)])
 
     # Specify the file path for your CSV file
-    csv_file_path = "Results/output_" * name* ".csv"
+    csv_file_path = "Results/Final_results/"*cost_name* "/Generation" * name* ".csv"
 
     # Export the DataFrame to CSV
     CSV.write(csv_file_path, df)
 
     println("CSV file exported to: $csv_file_path")
 
+    # Save the results for the power installed power
+    # Assuming your matrix is named `my_matrix`
+    Power = value.(P)   # Replace this with your actual matrix
+    # Column names
+    println(Power)
+    column_names_power = "Installed Power"
+
+    # Create a DataFrame with vectors for each column
+    df_Power = DataFrame(Symbol(column_names_power) => Power)
+
+    # Specify the file path for your CSV file
+    csv_file_path_power = "Results/Final_results/"*cost_name* "/Power" * name* ".csv"
+
+    # Export the DataFrame to CSV
+    CSV.write(csv_file_path_power, df_Power)
+
+    println("CSV file exported to: $csv_file_path_power")
+
+end
 end
